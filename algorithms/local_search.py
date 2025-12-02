@@ -21,24 +21,37 @@ def two_opt_swap(route, i, k):
 def three_opt_swap(route, i, j, k):
     """
     Perform a 3-opt swap on the route.
-    There are multiple ways to reconnect three segments - we use one efficient variant.
+    Returns the best reconnection among multiple 3-opt variants.
     
     Args:
         route: Current route
         i, j, k: Three cut positions (i < j < k)
         
     Returns:
-        New route with segments reconnected
+        List of new route variants to try
     """
     # Split route into segments
-    # Segment A: route[0:i]
-    # Segment B: route[i:j]
-    # Segment C: route[j:k]
-    # Segment D: route[k:]
+    # A: route[0:i]
+    # B: route[i:j]
+    # C: route[j:k]
+    # D: route[k:]
     
-    # Try one of the 3-opt reconnection variants (reverse middle segment)
-    new_route = route[:i] + route[j:k] + route[i:j] + route[k:]
-    return new_route
+    A = route[:i]
+    B = route[i:j]
+    C = route[j:k]
+    D = route[k:]
+    
+    # Generate different 3-opt reconnection variants
+    variants = [
+        A + B[::-1] + C + D,        # Reverse B
+        A + B + C[::-1] + D,        # Reverse C
+        A + C + B + D,              # Swap B and C
+        A + C[::-1] + B + D,        # Reverse C, then swap
+        A + B[::-1] + C[::-1] + D,  # Reverse both B and C
+        A + C + B[::-1] + D,        # Swap, then reverse B
+    ]
+    
+    return variants
 
 def local_search(cities: np.ndarray, iterations: int = 1000, opt_type: str = "2-opt"):
     """
@@ -100,33 +113,42 @@ def local_search(cities: np.ndarray, iterations: int = 1000, opt_type: str = "2-
                     break
         
         elif opt_type == "3-opt":
-            # Try 3-opt swaps (sampling for efficiency)
-            # Full 3-opt is very expensive, so we sample random triplets
-            attempts = min(100, n_cities * (n_cities - 1) // 2)  # Limit attempts per iteration
+            # Try 3-opt swaps
+            # For efficiency, we try all combinations but limit to reasonable subset
+            found_improvement_this_iter = False
             
-            for _ in range(attempts):
-                # Pick three random cut positions
-                cuts = sorted(random.sample(range(1, n_cities), 3))
-                i, j, k = cuts
-                
-                # Try the 3-opt swap
-                new_route = three_opt_swap(current_route, i, j, k)
-                new_distance = calculate_total_distance(new_route, cities)
-                
-                # If improvement found, accept it
-                if new_distance < current_distance:
-                    current_route = new_route
-                    current_distance = new_distance
-                    improvements_found = True
-                    
-                    # Update best if necessary
-                    if current_distance < best_distance:
-                        best_route = current_route.copy()
-                        best_distance = current_distance
-                    
-                    # Yield current state
-                    yield (current_route.copy(), current_distance, best_route.copy(), best_distance, iteration)
-                    break  # Found improvement, restart
+            for i in range(1, n_cities - 2):
+                if found_improvement_this_iter:
+                    break
+                for j in range(i + 1, n_cities - 1):
+                    if found_improvement_this_iter:
+                        break
+                    for k in range(j + 1, n_cities):
+                        # Get all 3-opt variants
+                        variants = three_opt_swap(current_route, i, j, k)
+                        
+                        # Try each variant
+                        for new_route in variants:
+                            new_distance = calculate_total_distance(new_route, cities)
+                            
+                            # If improvement found, accept it
+                            if new_distance < current_distance:
+                                current_route = new_route
+                                current_distance = new_distance
+                                improvements_found = True
+                                found_improvement_this_iter = True
+                                
+                                # Update best if necessary
+                                if current_distance < best_distance:
+                                    best_route = current_route.copy()
+                                    best_distance = current_distance
+                                
+                                # Yield current state
+                                yield (current_route.copy(), current_distance, best_route.copy(), best_distance, iteration)
+                                break  # Found improvement, restart
+                        
+                        if found_improvement_this_iter:
+                            break
         
         # If no improvement in this iteration, yield the state anyway
         if not improvements_found:

@@ -2,8 +2,8 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
-from algorithms import random_search, local_search, hill_climbing, calculate_total_distance
-import time
+from algorithms import (random_search, local_search, hill_climbing, 
+                       simulated_annealing, calculate_total_distance)
 
 # Page configuration
 st.set_page_config(page_title="TSP Solver", layout="wide")
@@ -17,28 +17,59 @@ st.sidebar.header("Configuration")
 # Algorithm selection
 algorithm = st.sidebar.selectbox(
     "Select Algorithm",
-    ["Random Search", "Local Search", "Hill Climbing"]
+    ["Random Search", "Local Search", "Hill Climbing", "Simulated Annealing"],
+    key="algorithm_selector"
 )
 
 # Algorithm-specific parameters
+opt_type = None
+variant = None
+initial_temp = None
+cooling_rate = None
+cooling_schedule = None
+
 if algorithm == "Local Search":
     opt_type = st.sidebar.radio(
         "Local Search Type",
         ["2-opt", "3-opt"],
-        help="2-opt: Reverses route segments | 3-opt: More complex reconnections"
+        help="2-opt: Reverses route segments | 3-opt: More complex reconnections",
+        key="local_search_type"
     )
-    variant = None
 elif algorithm == "Hill Climbing":
     variant = st.sidebar.radio(
         "Hill Climbing Variant",
         ["steepest", "first"],
         format_func=lambda x: "Steepest Ascent" if x == "steepest" else "First Improvement",
-        help="Steepest: Evaluates all neighbors, picks best | First: Accepts first improvement"
+        help="Steepest: Evaluates all neighbors, picks best | First: Accepts first improvement",
+        key="hill_climbing_variant"
     )
-    opt_type = None
-else:
-    opt_type = None
-    variant = None
+elif algorithm == "Simulated Annealing":
+    st.sidebar.subheader("Annealing Parameters")
+    initial_temp = st.sidebar.slider(
+        "Initial Temperature", 
+        min_value=100.0, 
+        max_value=10000.0, 
+        value=1000.0, 
+        step=100.0,
+        help="Higher temperature = more exploration initially",
+        key="initial_temp"
+    )
+    cooling_rate = st.sidebar.slider(
+        "Cooling Rate", 
+        min_value=0.900, 
+        max_value=0.999, 
+        value=0.995, 
+        step=0.001,
+        help="How quickly temperature decreases (closer to 1 = slower cooling)",
+        key="cooling_rate"
+    )
+    cooling_schedule = st.sidebar.radio(
+        "Cooling Schedule",
+        ["exponential", "linear", "logarithmic"],
+        format_func=lambda x: x.capitalize(),
+        help="Exponential: Fast initial cooling | Linear: Steady cooling | Logarithmic: Slow cooling",
+        key="cooling_schedule"
+    )
 
 # Load dataset
 @st.cache_data
@@ -62,15 +93,18 @@ with st.sidebar.expander("View Cities"):
 st.sidebar.header("Parameters")
 
 if algorithm == "Random Search":
-    iterations = st.sidebar.slider("Iterations", min_value=100, max_value=50000, value=5000, step=100)
+    iterations = st.sidebar.slider("Iterations", min_value=100, max_value=50000, value=5000, step=100, key="iterations_random")
 elif algorithm == "Local Search":
-    iterations = st.sidebar.slider("Max Iterations", min_value=10, max_value=1000, value=100, step=10)
+    iterations = st.sidebar.slider("Max Iterations", min_value=10, max_value=1000, value=100, step=10, key="iterations_local")
     st.sidebar.caption("Local search may stop early if no improvements are found")
 elif algorithm == "Hill Climbing":
-    iterations = st.sidebar.slider("Max Iterations", min_value=10, max_value=500, value=100, step=10)
+    iterations = st.sidebar.slider("Max Iterations", min_value=10, max_value=500, value=100, step=10, key="iterations_hill")
     st.sidebar.caption("Hill climbing stops when it reaches a local optimum")
+elif algorithm == "Simulated Annealing":
+    iterations = st.sidebar.slider("Iterations", min_value=100, max_value=10000, value=2000, step=100, key="iterations_sa")
+    st.sidebar.caption("More iterations allow for better convergence")
 
-update_frequency = st.sidebar.slider("Update Frequency (updates during run)", min_value=10, max_value=500, value=50, step=10)
+update_frequency = st.sidebar.slider("Update Frequency (updates during run)", min_value=10, max_value=500, value=50, step=10, key="update_freq")
 st.sidebar.caption(f"Will update visualization every ~{iterations//update_frequency} iterations")
 
 # Extract coordinates (using x_km, y_km for accurate distance calculation)
@@ -89,13 +123,15 @@ with col2:
     stat_current_distance = st.empty()
     stat_best_distance = st.empty()
     stat_improvement = st.empty()
+    if algorithm == "Simulated Annealing":
+        stat_temperature = st.empty()
 
 with col1:
     st.subheader("🗺️ Route Visualization")
     plot_placeholder = st.empty()
 
 # Function to plot the route
-def plot_route(cities_coords, city_names, route, title="Current Route", distance=None):
+def plot_route(cities_coords, city_names, route, title="Current Route", distance=None, temperature=None):
     """Plot the TSP route on a map."""
     fig, ax = plt.subplots(figsize=(10, 8))
     
@@ -121,7 +157,14 @@ def plot_route(cities_coords, city_names, route, title="Current Route", distance
     
     ax.set_xlabel('X (km)', fontsize=12)
     ax.set_ylabel('Y (km)', fontsize=12)
-    ax.set_title(f"{title}" + (f" - Distance: {distance:.2f} km" if distance else ""), fontsize=14, fontweight='bold')
+    
+    title_text = f"{title}"
+    if distance:
+        title_text += f" - Distance: {distance:.2f} km"
+    if temperature is not None:
+        title_text += f" | Temp: {temperature:.1f}"
+    
+    ax.set_title(title_text, fontsize=14, fontweight='bold')
     ax.grid(True, alpha=0.3)
     ax.legend()
     
@@ -139,6 +182,8 @@ if not run_algorithm:
     stat_current_distance.metric("Current Distance", f"{initial_distance:.2f} km")
     stat_best_distance.metric("Best Distance", f"{initial_distance:.2f} km")
     stat_improvement.metric("Improvement", "0.00%")
+    if algorithm == "Simulated Annealing":
+        stat_temperature.metric("Temperature", f"{initial_temp:.1f}" if initial_temp else "N/A")
 
 # Run the algorithm
 if run_algorithm:
@@ -157,8 +202,17 @@ if run_algorithm:
         algorithm_generator = local_search(cities_coords, iterations, opt_type)
     elif algorithm == "Hill Climbing":
         algorithm_generator = hill_climbing(cities_coords, iterations, variant)
+    elif algorithm == "Simulated Annealing":
+        algorithm_generator = simulated_annealing(cities_coords, iterations, initial_temp, cooling_rate, cooling_schedule)
     
-    for current_route, current_distance, best_route, best_distance, iteration in algorithm_generator:
+    for result in algorithm_generator:
+        # Handle different return formats
+        if algorithm == "Simulated Annealing":
+            current_route, current_distance, best_route, best_distance, iteration, temperature = result
+        else:
+            current_route, current_distance, best_route, best_distance, iteration = result
+            temperature = None
+        
         # Store initial distance
         if initial_distance is None:
             initial_distance = best_distance
@@ -177,8 +231,11 @@ if run_algorithm:
             stat_best_distance.metric("Best Distance Found", f"{best_distance:.2f} km")
             stat_improvement.metric("Improvement", f"{improvement:.2f}%")
             
+            if algorithm == "Simulated Annealing":
+                stat_temperature.metric("Temperature", f"{temperature:.1f}")
+            
             # Update plot with best route
-            fig = plot_route(cities_coords, city_names, best_route, "Best Route Found", best_distance)
+            fig = plot_route(cities_coords, city_names, best_route, "Best Route Found", best_distance, temperature)
             plot_placeholder.pyplot(fig)
             plt.close()
     

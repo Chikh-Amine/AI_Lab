@@ -1,83 +1,136 @@
 import numpy as np
-from .random_search import calculate_total_distance
-
+import random
+from .utils import calculate_total_distance
 
 def two_opt_swap(route, i, k):
-    """Return a new route where the segment between i and k is reversed."""
+    """
+    Perform a 2-opt swap on the route.
+    Reverses the order of cities between positions i and k.
+    
+    Args:
+        route: Current route
+        i: Start position
+        k: End position
+        
+    Returns:
+        New route with the segment reversed
+    """
     new_route = route[:i] + route[i:k+1][::-1] + route[k+1:]
     return new_route
 
-
 def three_opt_swap(route, i, j, k):
     """
-    Simplified 3-opt: tries a few common reconnections.
-    More versions exist, but this is enough for your project.
+    Perform a 3-opt swap on the route.
+    There are multiple ways to reconnect three segments - we use one efficient variant.
+    
+    Args:
+        route: Current route
+        i, j, k: Three cut positions (i < j < k)
+        
+    Returns:
+        New route with segments reconnected
     """
-    a, b, c = i, j, k
+    # Split route into segments
+    # Segment A: route[0:i]
+    # Segment B: route[i:j]
+    # Segment C: route[j:k]
+    # Segment D: route[k:]
+    
+    # Try one of the 3-opt reconnection variants (reverse middle segment)
+    new_route = route[:i] + route[j:k] + route[i:j] + route[k:]
+    return new_route
 
-    r0 = route[:]  # unchanged
-    r1 = route[:a] + route[a:b][::-1] + route[b:c] + route[c:]      # reverse segment 1
-    r2 = route[:a] + route[a:b] + route[b:c][::-1] + route[c:]      # reverse segment 2
-    r3 = route[:a] + route[b:c] + route[a:b] + route[c:]            # swap two segments
-    r4 = route[:a] + route[b:c][::-1] + route[a:b][::-1] + route[c:]  # reverse both
-
-    return [r0, r1, r2, r3, r4]
-
-
-def local_search(coords, iterations, method="2-opt"):
+def local_search(cities: np.ndarray, iterations: int = 1000, opt_type: str = "2-opt"):
     """
-    Local search TSP using 2-opt or 3-opt.
+    Local Search algorithm for TSP using 2-opt or 3-opt.
+    Starts with a random solution and iteratively improves it.
+    
+    Args:
+        cities: numpy array of city coordinates (x_km, y_km)
+        iterations: maximum number of iterations
+        opt_type: "2-opt" or "3-opt"
+        
     Yields:
-        current_route, current_distance, best_route, best_distance, iteration
+        tuple: (current_route, current_distance, best_route, best_distance, iteration)
     """
-    num_cities = len(coords)
-    best_route = np.arange(num_cities).tolist()
-    np.random.shuffle(best_route)
-
-    best_distance = calculate_total_distance(best_route, coords)
-
-    for iteration in range(1, iterations + 1):
-
-        improved = False
-        current_route = best_route[:]
-        current_distance = best_distance
-
-        if method == "2-opt":
-            # Try all 2-opt swaps
-            for i in range(num_cities - 1):
-                for k in range(i+1, num_cities):
-                    new_route = two_opt_swap(best_route, i, k)
-                    new_distance = calculate_total_distance(new_route, coords)
-
-                    if new_distance < best_distance:
-                        best_route = new_route
-                        best_distance = new_distance
-                        improved = True
-                        break
-                if improved:
+    n_cities = len(cities)
+    
+    # Start with a random route
+    current_route = list(range(n_cities))
+    random.shuffle(current_route)
+    current_distance = calculate_total_distance(current_route, cities)
+    
+    best_route = current_route.copy()
+    best_distance = current_distance
+    
+    # Yield initial state
+    yield (current_route.copy(), current_distance, best_route.copy(), best_distance, 0)
+    
+    improvements_found = True
+    iteration = 0
+    
+    while iteration < iterations and improvements_found:
+        iteration += 1
+        improvements_found = False
+        
+        if opt_type == "2-opt":
+            # Try all possible 2-opt swaps
+            for i in range(1, n_cities - 1):
+                for k in range(i + 1, n_cities):
+                    # Create new route with 2-opt swap
+                    new_route = two_opt_swap(current_route, i, k)
+                    new_distance = calculate_total_distance(new_route, cities)
+                    
+                    # If improvement found, accept it
+                    if new_distance < current_distance:
+                        current_route = new_route
+                        current_distance = new_distance
+                        improvements_found = True
+                        
+                        # Update best if necessary
+                        if current_distance < best_distance:
+                            best_route = current_route.copy()
+                            best_distance = current_distance
+                        
+                        # Yield current state
+                        yield (current_route.copy(), current_distance, best_route.copy(), best_distance, iteration)
+                        break  # Restart the search from the new solution
+                
+                if improvements_found:
                     break
-
-        elif method == "3-opt":
-            for i in range(num_cities - 2):
-                for j in range(i+1, num_cities - 1):
-                    for k in range(j+1, num_cities):
-                        candidates = three_opt_swap(best_route, i, j, k)
-                        for r in candidates:
-                            new_distance = calculate_total_distance(r, coords)
-                            if new_distance < best_distance:
-                                best_route = r
-                                best_distance = new_distance
-                                improved = True
-                                break
-                        if improved:
-                            break
-                    if improved:
-                        break
-                if improved:
-                    break
-
-        yield current_route, current_distance, best_route, best_distance, iteration
-
-        if not improved:
-            # No improvement → local optimum reached
-            break
+        
+        elif opt_type == "3-opt":
+            # Try 3-opt swaps (sampling for efficiency)
+            # Full 3-opt is very expensive, so we sample random triplets
+            attempts = min(100, n_cities * (n_cities - 1) // 2)  # Limit attempts per iteration
+            
+            for _ in range(attempts):
+                # Pick three random cut positions
+                cuts = sorted(random.sample(range(1, n_cities), 3))
+                i, j, k = cuts
+                
+                # Try the 3-opt swap
+                new_route = three_opt_swap(current_route, i, j, k)
+                new_distance = calculate_total_distance(new_route, cities)
+                
+                # If improvement found, accept it
+                if new_distance < current_distance:
+                    current_route = new_route
+                    current_distance = new_distance
+                    improvements_found = True
+                    
+                    # Update best if necessary
+                    if current_distance < best_distance:
+                        best_route = current_route.copy()
+                        best_distance = current_distance
+                    
+                    # Yield current state
+                    yield (current_route.copy(), current_distance, best_route.copy(), best_distance, iteration)
+                    break  # Found improvement, restart
+        
+        # If no improvement in this iteration, yield the state anyway
+        if not improvements_found:
+            yield (current_route.copy(), current_distance, best_route.copy(), best_distance, iteration)
+    
+    # Final yield
+    yield (best_route.copy(), best_distance, best_route.copy(), best_distance, iteration)

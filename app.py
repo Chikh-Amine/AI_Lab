@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
-from algorithms import random_search, calculate_total_distance
+from algorithms import random_search, local_search, calculate_total_distance
 import time
 
 # Page configuration
@@ -17,8 +17,18 @@ st.sidebar.header("Configuration")
 # Algorithm selection
 algorithm = st.sidebar.selectbox(
     "Select Algorithm",
-    ["Random Search"]  # We'll add more later
+    ["Random Search", "Local Search"]
 )
+
+# Algorithm-specific parameters
+if algorithm == "Local Search":
+    opt_type = st.sidebar.radio(
+        "Local Search Type",
+        ["2-opt", "3-opt"],
+        help="2-opt: Reverses route segments | 3-opt: More complex reconnections"
+    )
+else:
+    opt_type = None
 
 # Load dataset
 @st.cache_data
@@ -40,7 +50,13 @@ with st.sidebar.expander("View Cities"):
 
 # Algorithm parameters
 st.sidebar.header("Parameters")
-iterations = st.sidebar.slider("Iterations", min_value=100, max_value=50000, value=5000, step=100)
+
+if algorithm == "Random Search":
+    iterations = st.sidebar.slider("Iterations", min_value=100, max_value=50000, value=5000, step=100)
+elif algorithm == "Local Search":
+    iterations = st.sidebar.slider("Max Iterations", min_value=10, max_value=1000, value=100, step=10)
+    st.sidebar.caption("Local search may stop early if no improvements are found")
+
 update_frequency = st.sidebar.slider("Update Frequency (updates during run)", min_value=10, max_value=500, value=50, step=10)
 st.sidebar.caption(f"Will update visualization every ~{iterations//update_frequency} iterations")
 
@@ -124,6 +140,8 @@ if run_algorithm:
     # Run the selected algorithm
     if algorithm == "Random Search":
         algorithm_generator = random_search(cities_coords, iterations)
+    elif algorithm == "Local Search":
+        algorithm_generator = local_search(cities_coords, iterations, opt_type)
     
     for current_route, current_distance, best_route, best_distance, iteration in algorithm_generator:
         # Store initial distance

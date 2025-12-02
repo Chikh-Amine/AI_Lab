@@ -40,8 +40,9 @@ with st.sidebar.expander("View Cities"):
 
 # Algorithm parameters
 st.sidebar.header("Parameters")
-iterations = st.sidebar.slider("Iterations", min_value=100, max_value=10000, value=1000, step=100)
-animation_speed = st.sidebar.slider("Animation Speed (updates/sec)", min_value=1, max_value=50, value=10)
+iterations = st.sidebar.slider("Iterations", min_value=100, max_value=50000, value=5000, step=100)
+update_frequency = st.sidebar.slider("Update Frequency (updates during run)", min_value=10, max_value=500, value=50, step=10)
+st.sidebar.caption(f"Will update visualization every ~{iterations//update_frequency} iterations")
 
 # Extract coordinates (using x_km, y_km for accurate distance calculation)
 cities_coords = cities_df[['x_km', 'y_km']].values
@@ -118,8 +119,7 @@ if run_algorithm:
     progress_bar = st.sidebar.progress(0)
     
     initial_distance = None
-    update_interval = 1.0 / animation_speed  # Time between updates
-    last_update_time = 0
+    update_interval = max(1, iterations // update_frequency)  # Update every N iterations
     
     # Run the selected algorithm
     if algorithm == "Random Search":
@@ -130,13 +130,12 @@ if run_algorithm:
         if initial_distance is None:
             initial_distance = best_distance
         
-        # Update progress
-        progress = iteration / iterations
-        progress_bar.progress(progress)
-        
-        # Control update frequency
-        current_time = time.time()
-        if current_time - last_update_time >= update_interval or iteration == iterations:
+        # Only update UI periodically or on last iteration
+        if iteration % update_interval == 0 or iteration == iterations:
+            # Update progress
+            progress = iteration / iterations
+            progress_bar.progress(progress)
+            
             # Update statistics
             improvement = ((initial_distance - best_distance) / initial_distance) * 100
             
@@ -149,8 +148,6 @@ if run_algorithm:
             fig = plot_route(cities_coords, city_names, best_route, "Best Route Found", best_distance)
             plot_placeholder.pyplot(fig)
             plt.close()
-            
-            last_update_time = current_time
     
     st.sidebar.success("✅ Algorithm completed!")
     st.balloons()

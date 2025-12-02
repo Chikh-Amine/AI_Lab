@@ -1,186 +1,113 @@
-import streamlit as st
-import pandas as pd
-import matplotlib.pyplot as plt
 import numpy as np
-from algorithms import random_search, local_search, hill_climbing, calculate_total_distance
-import time
+import random
+from .utils import calculate_total_distance
 
-# Page configuration
-st.set_page_config(page_title="TSP Solver", layout="wide")
+def two_opt_swap(route, i, k):
+    """
+    Perform a 2-opt swap on the route.
+    Reverses the order of cities between positions i and k.
+    """
+    new_route = route[:i] + route[i:k+1][::-1] + route[k+1:]
+    return new_route
 
-# Title
-st.title("🗺️ Traveling Salesman Problem Solver")
-
-# Sidebar controls
-st.sidebar.header("Configuration")
-
-# Algorithm selection
-algorithm = st.sidebar.selectbox(
-    "Select Algorithm",
-    ["Random Search", "Local Search", "Hill Climbing"]
-)
-
-# Algorithm-specific parameters
-if algorithm == "Local Search":
-    opt_type = st.sidebar.radio(
-        "Local Search Type",
-        ["2-opt", "3-opt"],
-        help="2-opt: Reverses route segments | 3-opt: More complex reconnections"
-    )
-    variant = None
-elif algorithm == "Hill Climbing":
-    variant = st.sidebar.radio(
-        "Hill Climbing Variant",
-        ["steepest", "first"],
-        format_func=lambda x: "Steepest Ascent" if x == "steepest" else "First Improvement",
-        help="Steepest: Evaluates all neighbors, picks best | First: Accepts first improvement"
-    )
-    opt_type = None
-else:
-    opt_type = None
-    variant = None
-
-# Load dataset
-@st.cache_data
-def load_cities(file_path):
-    """Load city data from CSV."""
-    df = pd.read_csv(file_path)
-    return df
-
-try:
-    cities_df = load_cities("cities.csv")
-    st.sidebar.success(f"Loaded {len(cities_df)} cities")
-except FileNotFoundError:
-    st.error("❌ cities.csv not found! Please make sure it's in the same directory as app.py")
-    st.stop()
-
-# Display loaded cities
-with st.sidebar.expander("View Cities"):
-    st.dataframe(cities_df[['city', 'lat', 'lon']], height=200)
-
-# Algorithm parameters
-st.sidebar.header("Parameters")
-
-if algorithm == "Random Search":
-    iterations = st.sidebar.slider("Iterations", min_value=100, max_value=50000, value=5000, step=100)
-elif algorithm == "Local Search":
-    iterations = st.sidebar.slider("Max Iterations", min_value=10, max_value=1000, value=100, step=10)
-    st.sidebar.caption("Local search may stop early if no improvements are found")
-elif algorithm == "Hill Climbing":
-    iterations = st.sidebar.slider("Max Iterations", min_value=10, max_value=500, value=100, step=10)
-    st.sidebar.caption("Hill climbing stops when it reaches a local optimum")
-
-update_frequency = st.sidebar.slider("Update Frequency (updates during run)", min_value=10, max_value=500, value=50, step=10)
-st.sidebar.caption(f"Will update visualization every ~{iterations//update_frequency} iterations")
-
-# Extract coordinates (using x_km, y_km for accurate distance calculation)
-cities_coords = cities_df[['x_km', 'y_km']].values
-city_names = cities_df['city'].values
-
-# Run button
-run_algorithm = st.sidebar.button("🚀 Run Algorithm", type="primary")
-
-# Create two columns for layout
-col1, col2 = st.columns([2, 1])
-
-with col2:
-    st.subheader("📊 Statistics")
-    stat_iteration = st.empty()
-    stat_current_distance = st.empty()
-    stat_best_distance = st.empty()
-    stat_improvement = st.empty()
-
-with col1:
-    st.subheader("🗺️ Route Visualization")
-    plot_placeholder = st.empty()
-
-# Function to plot the route
-def plot_route(cities_coords, city_names, route, title="Current Route", distance=None):
-    """Plot the TSP route on a map."""
-    fig, ax = plt.subplots(figsize=(10, 8))
+def hill_climbing(cities: np.ndarray, iterations: int = 1000, variant: str = "steepest"):
+    """
+    Hill Climbing algorithm for TSP.
     
-    # Plot cities
-    ax.scatter(cities_coords[:, 0], cities_coords[:, 1], c='red', s=200, zorder=3, alpha=0.6)
+    Two variants:
+    - Steepest Ascent: Evaluates all neighbors, picks the best
+    - First Improvement: Accepts the first improvement found
     
-    # Add city labels
-    for idx, name in enumerate(city_names):
-        ax.annotate(name, (cities_coords[idx, 0], cities_coords[idx, 1]), 
-                   fontsize=9, ha='center', va='bottom', fontweight='bold')
-    
-    # Plot route
-    if route is not None:
-        route_coords = cities_coords[route]
-        # Close the loop
-        route_coords = np.vstack([route_coords, route_coords[0]])
-        ax.plot(route_coords[:, 0], route_coords[:, 1], 'b-', linewidth=2, alpha=0.7, zorder=2)
+    Args:
+        cities: numpy array of city coordinates (x_km, y_km)
+        iterations: maximum number of iterations
+        variant: "steepest" or "first" improvement
         
-        # Mark start city
-        start_city = cities_coords[route[0]]
-        ax.scatter(start_city[0], start_city[1], c='green', s=300, marker='*', 
-                  zorder=4, label='Start', edgecolors='black', linewidth=2)
+    Yields:
+        tuple: (current_route, current_distance, best_route, best_distance, iteration)
+    """
+    n_cities = len(cities)
     
-    ax.set_xlabel('X (km)', fontsize=12)
-    ax.set_ylabel('Y (km)', fontsize=12)
-    ax.set_title(f"{title}" + (f" - Distance: {distance:.2f} km" if distance else ""), fontsize=14, fontweight='bold')
-    ax.grid(True, alpha=0.3)
-    ax.legend()
+    # Start with a random route
+    current_route = list(range(n_cities))
+    random.shuffle(current_route)
+    current_distance = calculate_total_distance(current_route, cities)
     
-    return fig
-
-# Initial plot (before running algorithm)
-if not run_algorithm:
-    initial_route = list(range(len(cities_coords)))
-    initial_distance = calculate_total_distance(initial_route, cities_coords)
-    fig = plot_route(cities_coords, city_names, initial_route, "Initial Route", initial_distance)
-    plot_placeholder.pyplot(fig)
-    plt.close()
+    best_route = current_route.copy()
+    best_distance = current_distance
     
-    stat_iteration.metric("Iteration", "0")
-    stat_current_distance.metric("Current Distance", f"{initial_distance:.2f} km")
-    stat_best_distance.metric("Best Distance", f"{initial_distance:.2f} km")
-    stat_improvement.metric("Improvement", "0.00%")
-
-# Run the algorithm
-if run_algorithm:
-    st.sidebar.info("🔄 Algorithm running...")
+    # Yield initial state
+    yield (current_route.copy(), current_distance, best_route.copy(), best_distance, 0)
     
-    # Progress bar
-    progress_bar = st.sidebar.progress(0)
+    iteration = 0
     
-    initial_distance = None
-    update_interval = max(1, iterations // update_frequency)  # Update every N iterations
-    
-    # Run the selected algorithm
-    if algorithm == "Random Search":
-        algorithm_generator = random_search(cities_coords, iterations)
-    elif algorithm == "Local Search":
-        algorithm_generator = local_search(cities_coords, iterations, opt_type)
-    elif algorithm == "Hill Climbing":
-        algorithm_generator = hill_climbing(cities_coords, iterations, variant)
-    
-    for current_route, current_distance, best_route, best_distance, iteration in algorithm_generator:
-        # Store initial distance
-        if initial_distance is None:
-            initial_distance = best_distance
+    while iteration < iterations:
+        iteration += 1
+        improved = False
         
-        # Only update UI periodically or on last iteration
-        if iteration % update_interval == 0 or iteration == iterations:
-            # Update progress
-            progress = iteration / iterations
-            progress_bar.progress(progress)
+        if variant == "steepest":
+            # Steepest Ascent: Find the best neighbor
+            best_neighbor = None
+            best_neighbor_distance = current_distance
             
-            # Update statistics
-            improvement = ((initial_distance - best_distance) / initial_distance) * 100
+            for i in range(1, n_cities - 1):
+                for k in range(i + 1, n_cities):
+                    # Generate neighbor
+                    neighbor = two_opt_swap(current_route, i, k)
+                    neighbor_distance = calculate_total_distance(neighbor, cities)
+                    
+                    # Track best neighbor
+                    if neighbor_distance < best_neighbor_distance:
+                        best_neighbor = neighbor
+                        best_neighbor_distance = neighbor_distance
+                        improved = True
             
-            stat_iteration.metric("Iteration", f"{iteration:,} / {iterations:,}")
-            stat_current_distance.metric("Current Distance", f"{current_distance:.2f} km")
-            stat_best_distance.metric("Best Distance Found", f"{best_distance:.2f} km")
-            stat_improvement.metric("Improvement", f"{improvement:.2f}%")
+            # Move to best neighbor if improvement found
+            if improved:
+                current_route = best_neighbor
+                current_distance = best_neighbor_distance
+                
+                # Update global best
+                if current_distance < best_distance:
+                    best_route = current_route.copy()
+                    best_distance = current_distance
+                
+                # Yield state
+                yield (current_route.copy(), current_distance, best_route.copy(), best_distance, iteration)
+            else:
+                # No improvement found - stuck at local optimum
+                yield (current_route.copy(), current_distance, best_route.copy(), best_distance, iteration)
+                break
+        
+        elif variant == "first":
+            # First Improvement: Accept first better neighbor
+            for i in range(1, n_cities - 1):
+                if improved:
+                    break
+                for k in range(i + 1, n_cities):
+                    # Generate neighbor
+                    neighbor = two_opt_swap(current_route, i, k)
+                    neighbor_distance = calculate_total_distance(neighbor, cities)
+                    
+                    # Accept first improvement
+                    if neighbor_distance < current_distance:
+                        current_route = neighbor
+                        current_distance = neighbor_distance
+                        improved = True
+                        
+                        # Update global best
+                        if current_distance < best_distance:
+                            best_route = current_route.copy()
+                            best_distance = current_distance
+                        
+                        # Yield state
+                        yield (current_route.copy(), current_distance, best_route.copy(), best_distance, iteration)
+                        break
             
-            # Update plot with best route
-            fig = plot_route(cities_coords, city_names, best_route, "Best Route Found", best_distance)
-            plot_placeholder.pyplot(fig)
-            plt.close()
+            # If no improvement found, we're stuck
+            if not improved:
+                yield (current_route.copy(), current_distance, best_route.copy(), best_distance, iteration)
+                break
     
-    st.sidebar.success("✅ Algorithm completed!")
-    st.balloons()
+    # Final yield
+    yield (best_route.copy(), best_distance, best_route.copy(), best_distance, iteration)

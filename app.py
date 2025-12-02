@@ -3,7 +3,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 from algorithms import (random_search, local_search, hill_climbing, 
-                       simulated_annealing, calculate_total_distance)
+                       simulated_annealing, tabu_search, genetic_algorithm,
+                       calculate_total_distance)
 
 # Page configuration
 st.set_page_config(page_title="TSP Solver", layout="wide")
@@ -17,7 +18,8 @@ st.sidebar.header("Configuration")
 # Algorithm selection
 algorithm = st.sidebar.selectbox(
     "Select Algorithm",
-    ["Random Search", "Local Search", "Hill Climbing", "Simulated Annealing"],
+    ["Random Search", "Local Search", "Hill Climbing", "Simulated Annealing", 
+     "Tabu Search", "Genetic Algorithm"],
     key="algorithm_selector"
 )
 
@@ -27,6 +29,12 @@ variant = None
 initial_temp = None
 cooling_rate = None
 cooling_schedule = None
+tabu_tenure = None
+aspiration_enabled = None
+population_size = None
+mutation_rate = None
+elitism_count = None
+mutation_type = None
 
 if algorithm == "Local Search":
     opt_type = st.sidebar.radio(
@@ -70,6 +78,60 @@ elif algorithm == "Simulated Annealing":
         help="Exponential: Fast initial cooling | Linear: Steady cooling | Logarithmic: Slow cooling",
         key="cooling_schedule"
     )
+elif algorithm == "Tabu Search":
+    st.sidebar.subheader("Tabu Search Parameters")
+    tabu_tenure = st.sidebar.slider(
+        "Tabu Tenure",
+        min_value=5,
+        max_value=50,
+        value=10,
+        step=1,
+        help="Number of iterations a move stays forbidden (higher = more restrictive)",
+        key="tabu_tenure"
+    )
+    aspiration_enabled = st.sidebar.checkbox(
+        "Enable Aspiration Criterion",
+        value=True,
+        help="Allow tabu moves that improve the best solution found so far",
+        key="aspiration_enabled"
+    )
+elif algorithm == "Genetic Algorithm":
+    st.sidebar.subheader("Genetic Algorithm Parameters")
+    population_size = st.sidebar.slider(
+        "Population Size",
+        min_value=20,
+        max_value=200,
+        value=100,
+        step=10,
+        help="Number of routes in each generation (larger = more diversity)",
+        key="population_size"
+    )
+    mutation_rate = st.sidebar.slider(
+        "Mutation Rate",
+        min_value=0.001,
+        max_value=0.1,
+        value=0.01,
+        step=0.001,
+        format="%.3f",
+        help="Probability of random changes (higher = more exploration)",
+        key="mutation_rate"
+    )
+    elitism_count = st.sidebar.slider(
+        "Elitism Count",
+        min_value=1,
+        max_value=10,
+        value=2,
+        step=1,
+        help="Number of best solutions kept unchanged each generation",
+        key="elitism_count"
+    )
+    mutation_type = st.sidebar.radio(
+        "Mutation Type",
+        ["swap", "inversion"],
+        format_func=lambda x: "Swap (exchange two cities)" if x == "swap" else "Inversion (reverse segment)",
+        help="Swap: Less disruptive | Inversion: More disruptive",
+        key="mutation_type"
+    )
 
 # Load dataset
 @st.cache_data
@@ -103,6 +165,12 @@ elif algorithm == "Hill Climbing":
 elif algorithm == "Simulated Annealing":
     iterations = st.sidebar.slider("Iterations", min_value=100, max_value=10000, value=2000, step=100, key="iterations_sa")
     st.sidebar.caption("More iterations allow for better convergence")
+elif algorithm == "Tabu Search":
+    iterations = st.sidebar.slider("Iterations", min_value=100, max_value=5000, value=1000, step=50, key="iterations_tabu")
+    st.sidebar.caption("Tabu search explores systematically using memory")
+elif algorithm == "Genetic Algorithm":
+    iterations = st.sidebar.slider("Generations", min_value=10, max_value=500, value=100, step=10, key="iterations_genetic")
+    st.sidebar.caption("Each generation evolves the population")
 
 update_frequency = st.sidebar.slider("Update Frequency (updates during run)", min_value=10, max_value=500, value=50, step=10, key="update_freq")
 st.sidebar.caption(f"Will update visualization every ~{iterations//update_frequency} iterations")
@@ -125,6 +193,10 @@ with col2:
     stat_improvement = st.empty()
     if algorithm == "Simulated Annealing":
         stat_temperature = st.empty()
+    elif algorithm == "Tabu Search":
+        stat_tabu_size = st.empty()
+    elif algorithm == "Genetic Algorithm":
+        stat_avg_fitness = st.empty()
 
 with col1:
     st.subheader("🗺️ Route Visualization")
@@ -184,6 +256,10 @@ if not run_algorithm:
     stat_improvement.metric("Improvement", "0.00%")
     if algorithm == "Simulated Annealing":
         stat_temperature.metric("Temperature", f"{initial_temp:.1f}" if initial_temp else "N/A")
+    elif algorithm == "Tabu Search":
+        stat_tabu_size.metric("Tabu List Size", "0")
+    elif algorithm == "Genetic Algorithm":
+        stat_avg_fitness.metric("Avg Population Fitness", "N/A")
 
 # Run the algorithm
 if run_algorithm:
@@ -204,14 +280,30 @@ if run_algorithm:
         algorithm_generator = hill_climbing(cities_coords, iterations, variant)
     elif algorithm == "Simulated Annealing":
         algorithm_generator = simulated_annealing(cities_coords, iterations, initial_temp, cooling_rate, cooling_schedule)
+    elif algorithm == "Tabu Search":
+        algorithm_generator = tabu_search(cities_coords, iterations, tabu_tenure, aspiration_enabled)
+    elif algorithm == "Genetic Algorithm":
+        algorithm_generator = genetic_algorithm(cities_coords, iterations, population_size, mutation_rate, elitism_count, mutation_type)
     
     for result in algorithm_generator:
         # Handle different return formats
         if algorithm == "Simulated Annealing":
             current_route, current_distance, best_route, best_distance, iteration, temperature = result
+            tabu_size = None
+            avg_fitness = None
+        elif algorithm == "Tabu Search":
+            current_route, current_distance, best_route, best_distance, iteration, tabu_size = result
+            temperature = None
+            avg_fitness = None
+        elif algorithm == "Genetic Algorithm":
+            current_route, current_distance, best_route, best_distance, iteration, avg_fitness = result
+            temperature = None
+            tabu_size = None
         else:
             current_route, current_distance, best_route, best_distance, iteration = result
             temperature = None
+            tabu_size = None
+            avg_fitness = None
         
         # Store initial distance
         if initial_distance is None:
@@ -233,6 +325,10 @@ if run_algorithm:
             
             if algorithm == "Simulated Annealing":
                 stat_temperature.metric("Temperature", f"{temperature:.1f}")
+            elif algorithm == "Tabu Search":
+                stat_tabu_size.metric("Tabu List Size", f"{tabu_size}")
+            elif algorithm == "Genetic Algorithm":
+                stat_avg_fitness.metric("Avg Population Fitness", f"{avg_fitness:.6f}")
             
             # Update plot with best route
             fig = plot_route(cities_coords, city_names, best_route, "Best Route Found", best_distance, temperature)
